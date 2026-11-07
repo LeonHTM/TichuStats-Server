@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+import html
 
 from config import (
     CODE_EXPIRY_MINUTES,
@@ -109,10 +110,11 @@ def send_passkey_email(
     time_str = created_at.astimezone(_get_zone(timezone_name)).strftime("%H:%M")
     text = p["text"].format(m=time_str)
     intro = p["intro"].format(m=to_name)
+    intro_html = p["intro"].format(m=html.escape(to_name or ""))
 
     html_body = HTML_PASSKEY_TEMPLATE.format(
         lang=lang,
-        intro=intro,
+        intro=intro_html,
         text=text,
         please_contact_1 = p["please_contact_1"],
         please_contact_2=p["please_contact_2"],

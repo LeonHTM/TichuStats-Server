@@ -189,6 +189,7 @@ def register_verify():
 # Add a passkey to an already logged in account 
 #Existing credentials get excluded so the same authenticator cant register twice.
 @passkey_bp.post("/add/options")
+@limiter.limit("10 per hour")
 @jwt_required()
 def add_options():
     profile = Profile.query.get(int(get_jwt_identity()))
@@ -223,9 +224,6 @@ def add_options():
     challenge_id = str(uuid.uuid4())
     _save_challenge(challenge_id, profile.id, options.challenge, "registration")
 
-    if profile.email:
-        send_passkey_email(profile.email,profile.name,language_code,timezone_str)
-
     body = json.loads(options_to_json(options))
     body["challengeId"] = challenge_id
 
@@ -238,6 +236,13 @@ def add_options():
 @jwt_required()
 def add_verify():
     profile_id = int(get_jwt_identity())
+    profile = Profile.query.get(profile_id)
+    if profile is None:
+            return jsonify({"error": "unknown_user"}), 404
+    
+    data = request.get_json(silent=True) or {}
+    language_code = data.get("language_code","en")
+    timezone_str = data.get("timezone_str", "UTC")
 
     data = request.get_json(silent=True) or {}
     challenge_id = data.get("challengeId")
@@ -278,6 +283,8 @@ def add_verify():
     )
     db.session.add(new_credential)
     db.session.commit()
+    if profile.email:
+            send_passkey_email(profile.email,profile.name,language_code,timezone_str)
 
     return jsonify({"success": True, "credential": new_credential.to_dict()})
 
