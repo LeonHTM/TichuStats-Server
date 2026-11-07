@@ -5,7 +5,7 @@ from logic.profileLogic import Profile
 from logic.authLogic import generate_and_send_code, verify_code, too_many_codes
 from functools import wraps
 from config import APP_SECRET_TOKEN, SIGNUP_TOKEN_MAX_AGE
-from extensions import limiter
+from extensions import limiter, db
 
 auth_bp = Blueprint("auth", __name__)
 
@@ -85,6 +85,21 @@ def caller_is_admin():
     caller = Profile.query.get(current_id)
     return bool(caller and caller.is_admin)
 
+def issue_token(profile):
+    # Every app login token carries the profile's current token_version
+    return create_access_token(identity=str(profile.id), additional_claims={"ver": profile.token_version or 0})
+
+
+def is_token_revoked(jwt_payload):
+    # True if the token was revoked (logout_all) or its profile no longer exists (deleted account).
+    # Used for HTTP requests (token_in_blocklist_loader) and Socket.IO connects.
+    sub = str(jwt_payload.get("sub", ""))
+    if not sub.isdigit():
+        return False  # dashboard token ("browser"), protected by the session instead
+    profile = db.session.get(Profile, int(sub))
+    return profile is None or jwt_payload.get("ver", 0) != profile.token_version
+
+
 def admin_required(fn):
     @wraps(fn)
     @jwt_or_session_required
@@ -137,7 +152,7 @@ def verify_login_code(email=None, code=None):
 
     if profile:
         # Existing user — log them in
-        token = create_access_token(identity=str(profile.id))
+        token = issue_token(profile)
         return jsonify({"verified": True, "exists": True, "token": token, "id": profile.id}), 200
 
     # New user: hand out a short-lived proof that this email was verified

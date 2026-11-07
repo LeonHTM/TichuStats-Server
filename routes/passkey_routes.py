@@ -7,10 +7,11 @@ from flask import Blueprint, jsonify, request, current_app
 from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
 
 from extensions import db, socketio, limiter
+from logic.socketLogic import emit_to_players
 from logic.profileLogic import Profile
 from logic.passkeyLogic import Credential, WebAuthnChallenge
 from logic.gameLogic import EloHistory
-from routes.auth_routes import app_token_required
+from routes.auth_routes import app_token_required, issue_token
 from config import RP_ID, RP_NAME, ORIGIN
 
 from webauthn import (
@@ -178,9 +179,9 @@ def register_verify():
     db.session.add(EloHistory(profile_id=profile.id, game_id=None, elo_change=0))
     db.session.commit()
 
-    socketio.emit("profile_created", {"id": profile.id, "email": None, "name": profile.name})
+    emit_to_players("profile_created", {"id": profile.id, "name": profile.name})
 
-    token = create_access_token(identity=str(profile.id))
+    token = issue_token(profile)
     return jsonify({"token": token, "id": profile.id})
 
 
@@ -287,7 +288,7 @@ def connect_email():
 
     profile.email = email
     db.session.commit()
-    socketio.emit("username_updated", {"profile_id": profile.id, "name": profile.name})
+    emit_to_players("username_updated", {"profile_id": profile.id, "name": profile.name})
     return jsonify(profile.to_dict())
 """
 
@@ -364,7 +365,7 @@ def login_verify():
     db.session.commit()
 
     profile = Profile.query.get(stored.profile_id)
-    token = create_access_token(identity=str(profile.id))
+    token = issue_token(profile)
     return jsonify({"token": token, "id": profile.id})
 
 

@@ -10,10 +10,12 @@ from routes.round_routes import round_bp
 from routes.passkey_routes import passkey_bp
 from datetime import timedelta, datetime, timezone
 import os
-from routes.auth_routes import admin_required
+from routes.auth_routes import admin_required, is_token_revoked
+
 from logic.profileLogic import Profile
 from logic.gameLogic import Game
 from logic.authLogic import LoginCode
+import logic.socketLogic
 from sqlalchemy.engine import URL
 from werkzeug.middleware.proxy_fix import ProxyFix
 import hmac
@@ -41,6 +43,9 @@ def create_app():
 
     db.init_app(app)
     jwt.init_app(app)
+    @jwt.token_in_blocklist_loader
+    def token_revoked(jwt_header, jwt_payload):
+        return is_token_revoked(jwt_payload)
     limiter.init_app(app)
     socketio.init_app(app, cors_allowed_BASE_URLs="*", async_mode="threading", ping_interval=2, ping_timeout=10)
 

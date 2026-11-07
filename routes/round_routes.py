@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from extensions import db, socketio
+from logic.socketLogic import emit_to_game
 from logic.profileLogic import Profile
 from logic.roundLogic import Round
 from logic.gameLogic import Game, recalculate
@@ -260,7 +261,7 @@ def add_round():
 
     db.session.commit()
 
-    socketio.emit("round_created", round_obj.to_dict())
+    emit_to_game("round_created", round_obj.to_dict(), game)
 
     return jsonify(round_obj.to_dict()), 201
 
@@ -500,7 +501,7 @@ def edit_round(round_id):
 
     db.session.commit()
 
-    socketio.emit("round_updated", round_obj.to_dict())
+    emit_to_game("round_updated", round_obj.to_dict(), game)
 
     return jsonify(round_obj.to_dict()), 200
 
@@ -525,6 +526,6 @@ def delete_round(round_id):
 
     db.session.commit()
 
-    socketio.emit("round_deleted", {"round_id": round_id, "game_id": game.id})
+    emit_to_game("round_deleted", {"round_id": round_id, "game_id": game.id}, game)
 
     return jsonify({"success": True}), 200

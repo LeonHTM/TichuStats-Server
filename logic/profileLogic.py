@@ -27,6 +27,7 @@ class Profile(db.Model):
     elo = db.Column(db.Float, default=1000.0)
 
     is_admin = db.Column(db.Boolean, nullable=False, default=False)
+    token_version = db.Column(db.Integer, nullable=False, default=0, server_default="0")
 
     device_tokens = db.relationship("UserDeviceToken", back_populates="profile", cascade="all, delete-orphan")
     stats = db.relationship("ProfileStats", back_populates="profile", cascade="all, delete-orphan")

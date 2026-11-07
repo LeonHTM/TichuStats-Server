@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify, request, current_app
 from flask_jwt_extended import get_jwt_identity,jwt_required
 from extensions import db, socketio
+from logic.socketLogic import emit_to_users
 from logic.profileLogic import Profile, ProfileFriend, FriendRequest, public_image_url
 from logic.notificationLogic import notify_user, notify_accepted
 from config import BASE_URL
@@ -51,7 +52,7 @@ def add_friend(profile_id, friend_id):
     db.session.add(friendship)
     db.session.commit()
 
-    socketio.emit("friendship_added", {"profile_id": profile_id, "friend_id": friend_id})
+    emit_to_users("friendship_added", {"profile_id": profile_id, "friend_id": friend_id}, [profile_id, friend_id])
 
     conversation_id = f"friends-{min(profile_id, friend_id)}-{max(profile_id, friend_id)}"
     image_url = f"{BASE_URL}{public_image_url(profile.profile_image_url)}" if profile.profile_image_url else None
@@ -83,7 +84,7 @@ def remove_friend(profile_id, friend_id):
 
     db.session.delete(friendship)
     db.session.commit()
-    socketio.emit("friendship_removed", {"profile_id": profile_id, "friend_id": friend_id})
+    emit_to_users("friendship_removed", {"profile_id": profile_id, "friend_id": friend_id}, [profile_id, friend_id])
     return jsonify({"message": "Friendship removed"}), 200
 
 @friend_bp.route("/add_request/<int:sender_id>/request/<int:receiver_id>", methods=["POST"])
@@ -114,9 +115,9 @@ def send_friend_request(sender_id, receiver_id):
                 db.session.add(ProfileFriend(profile_id=sender_id, friend_id=receiver_id))
             db.session.commit()
 
-            socketio.emit("friend_request_updated", {"sender_id": sender_id, "receiver_id": receiver_id, "status": "accepted"})
-            socketio.emit("remove_friend_request_notification", {"user_id": receiver_id, "sender_id": sender_id})
-            socketio.emit("remove_friend_request_notification", {"user_id": sender_id, "sender_id": receiver_id})
+            emit_to_users("friend_request_updated", {"sender_id": sender_id, "receiver_id": receiver_id, "status": "accepted"}, [sender_id, receiver_id])
+            emit_to_users("remove_friend_request_notification", {"user_id": receiver_id, "sender_id": sender_id}, [receiver_id])
+            emit_to_users("remove_friend_request_notification", {"user_id": sender_id, "sender_id": receiver_id}, [sender_id])
 
             image_url = f"{BASE_URL}{public_image_url(sender.profile_image_url)}" if sender.profile_image_url else None
             notify_accepted(
@@ -140,7 +141,7 @@ def send_friend_request(sender_id, receiver_id):
         current_app.logger.exception("Database error")
         return jsonify({"error": "Database error"}), 500
 
-    socketio.emit("friend_request_sent", {"id": req.id, "sender_id": sender_id, "receiver_id": receiver_id})
+    emit_to_users("friend_request_sent", {"id": req.id, "sender_id": sender_id, "receiver_id": receiver_id}, [sender_id, receiver_id])
 
     image_url = f"{BASE_URL}{public_image_url(sender.profile_image_url)}" if sender.profile_image_url else None
     notify_user(
@@ -177,8 +178,8 @@ def respond_to_request(receiver_id, sender_id):
         if action == "accepted":
             if not ProfileFriend.query.filter_by(profile_id=sender_id, friend_id=receiver_id).first():
                 db.session.add(ProfileFriend(profile_id=sender_id, friend_id=receiver_id))
-                socketio.emit("remove_friend_request_notification", {"user_id": receiver_id, "sender_id": sender_id})
-                socketio.emit("remove_friend_request_notification", {"user_id": sender_id, "sender_id": receiver_id})
+                emit_to_users("remove_friend_request_notification", {"user_id": receiver_id, "sender_id": sender_id}, [receiver_id])
+                emit_to_users("remove_friend_request_notification", {"user_id": sender_id, "sender_id": receiver_id}, [sender_id])
 
         db.session.delete(freq)
         db.session.commit()
@@ -188,7 +189,7 @@ def respond_to_request(receiver_id, sender_id):
         current_app.logger.exception("Database error")
         return jsonify({"error": "Database error"}), 500
 
-    socketio.emit("friend_request_updated", {"sender_id": sender_id, "receiver_id": receiver_id, "status": action})
+    emit_to_users("friend_request_updated", {"sender_id": sender_id, "receiver_id": receiver_id, "status": action}, [sender_id, receiver_id])
 
     if action == "accepted" and sender:
         conversation_id = f"friends-{min(sender_id, receiver_id)}-{max(sender_id, receiver_id)}"
@@ -245,8 +246,8 @@ def cancel_request(sender_id, receiver_id):
         current_app.logger.exception("Database error")
         return jsonify({"error": "Database error"}), 500
 
-    socketio.emit("friend_request_updated",
-                  {"sender_id": sender_id, "receiver_id": receiver_id, "status": "cancelled"})
-    socketio.emit("remove_friend_request_notification",
-                  {"user_id": receiver_id, "sender_id": sender_id})
+    emit_to_users("friend_request_updated",
+                  {"sender_id": sender_id, "receiver_id": receiver_id, "status": "cancelled"}, [sender_id, receiver_id])
+    emit_to_users("remove_friend_request_notification",
+                  {"user_id": receiver_id, "sender_id": sender_id}, [receiver_id])
     return jsonify({"message": "Request cancelled"}), 200

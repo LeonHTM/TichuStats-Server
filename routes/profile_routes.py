@@ -10,11 +10,12 @@ from werkzeug.utils import secure_filename
 from extensions import db, socketio
 from logic.profileLogic import Profile, UserDeviceToken, ProfileSettings, calculateStats, ProfileStats, ProfileFriend, FriendRequest, public_image_url
 from config import SESSION_MINUTES, ALLOWED_EXTENSIONS, APP_SECRET_TOKEN, MAX_HISTORY_ENTRIES, TIMEFRAMES
-from routes.auth_routes import jwt_or_session_required, app_token_required, current_identity, caller_is_admin, is_dashboard_session, read_signup_token
+from routes.auth_routes import jwt_or_session_required, app_token_required, current_identity, caller_is_admin, is_dashboard_session, read_signup_token, issue_token
 from logic.gameLogic import EloHistory, handle_user_deleted
 from logic.gameLogic import Game
 from logic.roundLogic import Round
 from extensions import limiter
+from logic.socketLogic import emit_to_players, emit_to_users
 
 
 profile_bp = Blueprint("profile", __name__)
@@ -138,7 +139,7 @@ def update_profile_settings(profile_id):
 
     try:
         db.session.commit()
-        socketio.emit("settings_updated", {"id": profile_id})
+        emit_to_users("settings_updated", {"id": profile_id}, [profile_id])
     except Exception:
         db.session.rollback()
         current_app.logger.exception("Saving settings failed")
@@ -328,9 +329,8 @@ def create_profile():
     db.session.add(EloHistory(profile_id=new_profile.id, game_id=None, elo_change=0))
     db.session.commit()
 
-    from flask_jwt_extended import create_access_token
-    token = create_access_token(identity=str(new_profile.id))
-    socketio.emit("profile_created", {"id": new_profile.id, "name": new_profile.name})
+    token = issue_token(new_profile)
+    emit_to_players("profile_created", {"id": new_profile.id, "name": new_profile.name})
     return jsonify({"id": new_profile.id, "token": token}), 201
 
 @profile_bp.route("/dashboard/update_profile/<profile_id>", methods=["POST"])
@@ -370,10 +370,10 @@ def dashboard_update_profile(profile_id):
 
     db.session.commit()
 
-    socketio.emit("username_updated", {"profile_id": profile_id, "name": profile.name})
-    socketio.emit("admin_updated", {"profile_id": profile_id, "admin": profile.is_admin})
+    emit_to_players("username_updated", {"profile_id": profile_id, "name": profile.name})
+    emit_to_players("admin_updated", {"profile_id": profile_id, "admin": profile.is_admin})
     if image_updated:
-        socketio.emit("profile_image_updated", {"profile_id": profile_id, "image_url": public_image_url(filepath)})
+        emit_to_players("profile_image_updated", {"profile_id": profile_id, "image_url": public_image_url(filepath)})
 
     return "ok", 200
 
@@ -396,7 +396,7 @@ def delete_profile(profile_id):
 
     db.session.delete(profile)
     db.session.commit()
-    socketio.emit("profile_deleted", {"id": profile_id})
+    emit_to_players("profile_deleted", {"id": profile_id})
     return jsonify({"message": f"Profile {profile_id} deleted"}), 200
 
 @profile_bp.route("/check_username/<string:username>", methods=["GET"])
@@ -421,7 +421,7 @@ def update_username(profile_id):
 
     profile.name = name
     db.session.commit()
-    socketio.emit("username_updated", {"profile_id": profile_id, "name": name})
+    emit_to_players("username_updated", {"profile_id": profile_id, "name": name})
     return jsonify(profile.to_dict()), 200
 
 @profile_bp.route("/check_email", methods=["POST"])
@@ -454,7 +454,7 @@ def upload_profile_image(profile_id):
     profile.profile_image_url = filepath
     db.session.commit()
     url = public_image_url(filepath)
-    socketio.emit("profile_image_updated", {"profile_id": profile_id, "image_url": url})
+    emit_to_players("profile_image_updated", {"profile_id": profile_id, "image_url": url})
     return jsonify({"message": "Image uploaded", "path": url}), 200
 
 @profile_bp.route("/uploads/profile_images/<filename>", methods=["GET"])
@@ -482,6 +482,24 @@ def logout(profile_id):
         ).delete()
     else:
         UserDeviceToken.query.filter_by(user_id=profile_id).delete()
+
+    db.session.commit()
+    return jsonify({"success": True}), 200
+
+
+@profile_bp.route("/logout_all/<int:profile_id>", methods=["POST"])
+@jwt_required()
+def logout_all(profile_id):
+    if int(get_jwt_identity()) != profile_id:
+        return jsonify({"error": "forbidden"}), 403
+    profile = Profile.query.get(profile_id)
+    if not profile:
+        return jsonify({"error": "Profile not found"}), 404
+
+    # Invalidates EVERY token of this account (all devices, also stolen ones)
+    profile.token_version = (profile.token_version or 0) + 1
+    # No device of this account should keep receiving pushes
+    UserDeviceToken.query.filter_by(user_id=profile_id).delete()
 
     db.session.commit()
     return jsonify({"success": True}), 200

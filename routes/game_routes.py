@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from extensions import db, socketio
+from logic.socketLogic import emit_to_game, emit_to_users
 from logic.profileLogic import Profile, calculateStats
 from logic.gameLogic import Game, recalculate, EloHistory, finish_game
 from logic.roundLogic import Round
@@ -71,7 +72,7 @@ def add_game():
     db.session.add(game)
     db.session.commit()
 
-    socketio.emit("game_created", game.to_dict())
+    emit_to_game("game_created", game.to_dict(), game)
 
     return jsonify(game.to_dict()), 201
 
@@ -98,7 +99,7 @@ def edit_target_route():
     recalculate(game_id)
 
     db.session.commit()
-    socketio.emit("game_updated", {"game_id": game_id})
+    emit_to_game("game_updated", {"game_id": game_id}, game)
     return jsonify({"success": True}), 200
 
 
@@ -131,7 +132,7 @@ def finish_game_route():
 
     recalculate(game_id, tie)
     finish_game(game_id, tie)
-    socketio.emit("game_finished", {"game_id": game_id})
+    emit_to_game("game_finished", {"game_id": game_id}, game)
     return jsonify({"success": True}), 200
 
 
@@ -166,7 +167,7 @@ def game_edit_guest_name():
         return jsonify({"error": "guest_id not existent value"}), 405
 
     db.session.commit()
-    socketio.emit("game_updated", {"game_id": game_id})
+    emit_to_game("game_updated", {"game_id": game_id}, game)
     return jsonify({"success": True}), 200
 
 
@@ -212,7 +213,7 @@ def game_edit_player(game_id):
 
     db.session.commit()
 
-    socketio.emit("game_updated", game.to_dict())
+    emit_to_game("game_updated", game.to_dict(), game)
 
     return jsonify(game.to_dict()), 200
 
@@ -241,7 +242,7 @@ def delete_game(game_id):
         calculateStats(player_id, "week")
         calculateStats(player_id, "day")
 
-    socketio.emit("game_deleted", {"game_id": game_id})
+    emit_to_users("game_deleted", {"game_id": game_id}, player_ids)
 
     return jsonify({"success": True}), 200
 
