@@ -125,6 +125,7 @@ def finish_game_route():
     if current_id is None or not is_game_participant(game, current_id):
         return jsonify({"error": "forbidden"}), 403
 
+    tie = bool(tie) or game.winner == 3
     if game.calculated == True:
         print("Game already Calculated")
         print(f"{game.calculated}")

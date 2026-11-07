@@ -99,7 +99,7 @@ def recalculate(game_id,tie=False):
         .order_by(Round.round_order)
         .all()
     )
-
+    tie = tie or game.winner == 3
     game.current_points_team1 = 0
     game.current_points_team2 = 0
     game.winner = None
