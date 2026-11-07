@@ -1,7 +1,7 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from flask_jwt_extended import get_jwt_identity,jwt_required
 from extensions import db, socketio
-from logic.profileLogic import Profile, ProfileFriend, FriendRequest
+from logic.profileLogic import Profile, ProfileFriend, FriendRequest, public_image_url
 from logic.notificationLogic import notify_user, notify_accepted
 from config import BASE_URL
 
@@ -54,7 +54,7 @@ def add_friend(profile_id, friend_id):
     socketio.emit("friendship_added", {"profile_id": profile_id, "friend_id": friend_id})
 
     conversation_id = f"friends-{min(profile_id, friend_id)}-{max(profile_id, friend_id)}"
-    image_url = f"{BASE_URL}/{profile.profile_image_url}" if profile.profile_image_url else None
+    image_url = f"{BASE_URL}{public_image_url(profile.profile_image_url)}" if profile.profile_image_url else None
     notify_accepted(
         profile_id=friend_id,
         sender_name=profile.name,
@@ -118,7 +118,7 @@ def send_friend_request(sender_id, receiver_id):
             socketio.emit("remove_friend_request_notification", {"user_id": receiver_id, "sender_id": sender_id})
             socketio.emit("remove_friend_request_notification", {"user_id": sender_id, "sender_id": receiver_id})
 
-            image_url = f"{BASE_URL}/{sender.profile_image_url}" if sender.profile_image_url else None
+            image_url = f"{BASE_URL}{public_image_url(sender.profile_image_url)}" if sender.profile_image_url else None
             notify_accepted(
                 profile_id=receiver_id,
                 sender_name=sender.name,
@@ -135,13 +135,14 @@ def send_friend_request(sender_id, receiver_id):
         db.session.add(req)
         db.session.commit()
 
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return jsonify({"error": "Database error", "details": str(e)}), 500
+        current_app.logger.exception("Database error")
+        return jsonify({"error": "Database error"}), 500
 
     socketio.emit("friend_request_sent", {"id": req.id, "sender_id": sender_id, "receiver_id": receiver_id})
 
-    image_url = f"{BASE_URL}/{sender.profile_image_url}" if sender.profile_image_url else None
+    image_url = f"{BASE_URL}{public_image_url(sender.profile_image_url)}" if sender.profile_image_url else None
     notify_user(
         profile_id=receiver_id,
         sender_name=sender.name,
@@ -182,15 +183,16 @@ def respond_to_request(receiver_id, sender_id):
         db.session.delete(freq)
         db.session.commit()
 
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return jsonify({"error": "Database error", "details": str(e)}), 500
+        current_app.logger.exception("Database error")
+        return jsonify({"error": "Database error"}), 500
 
     socketio.emit("friend_request_updated", {"sender_id": sender_id, "receiver_id": receiver_id, "status": action})
 
     if action == "accepted" and sender:
         conversation_id = f"friends-{min(sender_id, receiver_id)}-{max(sender_id, receiver_id)}"
-        image_url = f"{BASE_URL}/{receiver.profile_image_url}" if receiver and receiver.profile_image_url else None
+        image_url = f"{BASE_URL}{public_image_url(receiver.profile_image_url)}" if receiver and receiver.profile_image_url else None
         notify_accepted(
             profile_id=sender_id,
             sender_name=receiver.name,
@@ -238,9 +240,10 @@ def cancel_request(sender_id, receiver_id):
     try:
         db.session.delete(freq)
         db.session.commit()
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return jsonify({"error": "Database error", "details": str(e)}), 500
+        current_app.logger.exception("Database error")
+        return jsonify({"error": "Database error"}), 500
 
     socketio.emit("friend_request_updated",
                   {"sender_id": sender_id, "receiver_id": receiver_id, "status": "cancelled"})

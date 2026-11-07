@@ -3,10 +3,10 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
 
-from extensions import db, socketio
+from extensions import db, socketio, limiter
 from logic.profileLogic import Profile
 from logic.passkeyLogic import Credential, WebAuthnChallenge
 from logic.gameLogic import EloHistory
@@ -53,6 +53,9 @@ def _webauthn_user_id(profile_id: int) -> bytes:
 
 
 def _save_challenge(challenge_id: str, profile_id: int | None, challenge: bytes, ceremony_type: str):
+    WebAuthnChallenge.query.filter(
+        WebAuthnChallenge.expires_at < datetime.now(timezone.utc).replace(tzinfo=None)
+    ).delete(synchronize_session=False)
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=CHALLENGE_TTL_SECONDS)
     db.session.add(
         WebAuthnChallenge(
@@ -85,6 +88,7 @@ def _pop_challenge(challenge_id: str, ceremony_type: str):
 
 
 @passkey_bp.post("/register/options")
+@limiter.limit("20 per minute")
 @app_token_required
 def register_options():
     data = request.get_json(silent=True) or {}
@@ -152,8 +156,9 @@ def register_verify():
             expected_origin=ORIGIN,
             require_user_verification=True,
         )
-    except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": "verification_failed", "detail": str(exc)}), 400
+    except Exception:  # noqa: BLE001
+        current_app.logger.warning("Passkey verification_failed", exc_info=True)
+        return jsonify({"error": "verification_failed"}), 400
 
     transports = credential.get("transports")
 
@@ -244,8 +249,9 @@ def add_verify():
             expected_origin=ORIGIN,
             require_user_verification=True,
         )
-    except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": "verification_failed", "detail": str(exc)}), 400
+    except Exception:  # noqa: BLE001
+        current_app.logger.warning("Passkey verification_failed", exc_info=True)
+        return jsonify({"error": "verification_failed"}), 400
 
     transports = credential.get("transports")
     new_credential = Credential(
@@ -286,6 +292,7 @@ def connect_email():
 """
 
 @passkey_bp.post("/login/options")
+@limiter.limit("20 per minute")
 @app_token_required
 def login_options():
     data = request.get_json(silent=True) or {}
@@ -330,8 +337,9 @@ def login_verify():
 
     try:
         parsed_credential = parse_authentication_credential_json(json.dumps(credential))
-    except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": "invalid_credential", "detail": str(exc)}), 400
+    except Exception:  # noqa: BLE001
+        current_app.logger.warning("Passkey verification_failed", exc_info=True)
+        return jsonify({"error": "invalid credentials"}), 400
 
     stored = Credential.query.filter_by(credential_id=parsed_credential.raw_id).first()
     if stored is None:
@@ -347,8 +355,9 @@ def login_verify():
             credential_current_sign_count=stored.sign_count,
             require_user_verification=True,
         )
-    except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": "verification_failed", "detail": str(exc)}), 400
+    except Exception:  # noqa: BLE001
+        current_app.logger.warning("Passkey verification_failed", exc_info=True)
+        return jsonify({"error": "verification_failed"}), 400
 
     stored.sign_count = verification.new_sign_count
     stored.last_used_at = datetime.utcnow()

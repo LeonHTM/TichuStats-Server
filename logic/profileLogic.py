@@ -2,6 +2,15 @@ from flask_sqlalchemy import SQLAlchemy
 from extensions import db, socketio
 from logic.roundLogic import Round
 from datetime import datetime
+import os
+
+import os
+
+
+def public_image_url(path):
+    if not path:
+        return None
+    return f"/uploads/profile_images/{os.path.basename(path)}"
 
 
 class Profile(db.Model):
@@ -28,7 +37,7 @@ class Profile(db.Model):
         return {
             "id": self.id,
             "name": self.name,
-            "profile_image_url": self.profile_image_url,
+            "profile_image_url": public_image_url(self.profile_image_url),
             "elo": self.elo,
             "is_admin": self.is_admin,
         }
@@ -37,7 +46,7 @@ class Profile(db.Model):
         return {
             "id": self.id,
             "name": self.name,
-            "profile_image_url": self.profile_image_url,
+            "profile_image_url": public_image_url(self.profile_image_url),
             "elo": self.elo,
             "is_admin": self.is_admin,
             "created_at": self.created_at.isoformat() if self.created_at else None,

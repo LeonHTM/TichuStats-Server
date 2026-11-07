@@ -8,18 +8,35 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from werkzeug.utils import secure_filename
 
 from extensions import db, socketio
-from logic.profileLogic import Profile, UserDeviceToken, ProfileSettings, calculateStats, ProfileStats, ProfileFriend, FriendRequest
+from logic.profileLogic import Profile, UserDeviceToken, ProfileSettings, calculateStats, ProfileStats, ProfileFriend, FriendRequest, public_image_url
 from config import SESSION_MINUTES, ALLOWED_EXTENSIONS, APP_SECRET_TOKEN, MAX_HISTORY_ENTRIES, TIMEFRAMES
 from routes.auth_routes import jwt_or_session_required, app_token_required, current_identity, caller_is_admin, is_dashboard_session, read_signup_token
 from logic.gameLogic import EloHistory, handle_user_deleted
 from logic.gameLogic import Game
 from logic.roundLogic import Round
+from extensions import limiter
 
 
 profile_bp = Blueprint("profile", __name__)
 
-def allowed_file(filename):
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+IMAGE_SIGNATURES = {
+    b"\xff\xd8\xff": "jpg",
+    b"\x89PNG\r\n\x1a\n": "png",
+}
+
+def save_profile_image(file, profile_id):
+    """Saves the upload as profile_<id>.<jpg|png>. Returns the file path, or None if it is not a JPEG/PNG."""
+    if not file:
+        return None
+    head = file.stream.read(8)
+    file.stream.seek(0)
+    ext = next((e for sig, e in IMAGE_SIGNATURES.items() if head.startswith(sig)), None)
+    if ext is None:
+        return None
+
+    filepath = os.path.join(current_app.config["UPLOAD_FOLDER"], f"profile_{profile_id}.{ext}")
+    file.save(filepath)
+    return filepath
 
 
 @profile_bp.route("/profiles", methods=["GET"])
@@ -122,9 +139,10 @@ def update_profile_settings(profile_id):
     try:
         db.session.commit()
         socketio.emit("settings_updated", {"id": profile_id})
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return jsonify({"error": str(e)}), 500
+        current_app.logger.exception("Saving settings failed")
+        return jsonify({"error": "Database error"}), 500
 
     return jsonify(settings.to_dict()), 200
 
@@ -226,8 +244,9 @@ def profilestatshistory():
             tf: [s.to_dict() for s in latest_stats_per_period(profile_id, tf)]
             for tf in TIMEFRAMES
         }
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 500
+    except ValueError:
+        current_app.logger.exception("Loading stats history failed")
+        return jsonify({"error": "Internal error"}), 500
     return jsonify(result)
 
 
@@ -342,26 +361,19 @@ def dashboard_update_profile(profile_id):
 
     image_updated = False
     filepath = None
-    if "image" in request.files:
-        file = request.files["image"]
-        if file and file.filename and allowed_file(file.filename):
-            filename = secure_filename(f"profile_{profile_id}.{file.filename.rsplit('.', 1)[1].lower()}")
-            filepath = os.path.join(current_app.config["UPLOAD_FOLDER"], filename)
-            file.save(filepath)
-
-            with open(filepath, "rb") as f:
-                f.flush()
-                os.fsync(f.fileno())
-
-            profile.profile_image_url = filepath
-            image_updated = True
+    if "image" in request.files and request.files["image"].filename:
+        filepath = save_profile_image(request.files["image"], profile_id)
+        if filepath is None:
+            return jsonify({"error": "Only JPEG or PNG images are allowed"}), 400
+        profile.profile_image_url = filepath
+        image_updated = True
 
     db.session.commit()
 
     socketio.emit("username_updated", {"profile_id": profile_id, "name": profile.name})
     socketio.emit("admin_updated", {"profile_id": profile_id, "admin": profile.is_admin})
     if image_updated:
-        socketio.emit("profile_image_updated", {"profile_id": profile_id, "image_url": filepath})
+        socketio.emit("profile_image_updated", {"profile_id": profile_id, "image_url": public_image_url(filepath)})
 
     return "ok", 200
 
@@ -412,13 +424,16 @@ def update_username(profile_id):
     socketio.emit("username_updated", {"profile_id": profile_id, "name": name})
     return jsonify(profile.to_dict()), 200
 
-@profile_bp.route("/check_email/<string:email>", methods=["GET"])
+@profile_bp.route("/check_email", methods=["POST"])
+@limiter.limit("60 per minute; 300 per hour")
 @app_token_required
-def check_email(email):
-    existing = Profile.query.filter_by(email=email).first()
-    if existing:
-        return jsonify({"available": False, "id": existing.id})
-    return jsonify({"available": True, "id": None})
+def check_email():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"error": "Email required"}), 400
+    exists = Profile.query.filter_by(email=email).first() is not None
+    return jsonify({"exists": exists})
 
 @profile_bp.route("/add_image/<int:profile_id>/", methods=["POST"])
 @jwt_required()
@@ -432,22 +447,15 @@ def upload_profile_image(profile_id):
     if "image" not in request.files:
         return jsonify({"error": "No image provided"}), 400
 
-    file = request.files["image"]
-    if not allowed_file(file.filename):
-        return jsonify({"error": "File type not allowed"}), 400
-
-    filename = secure_filename(f"profile_{profile_id}.{file.filename.rsplit('.', 1)[1].lower()}")
-    filepath = os.path.join(current_app.config["UPLOAD_FOLDER"], filename)
-    file.save(filepath)
-
-    with open(filepath, "rb") as f:
-        f.flush()
-        os.fsync(f.fileno())
+    filepath = save_profile_image(request.files["image"], profile_id)
+    if filepath is None:
+        return jsonify({"error": "Only JPEG or PNG images are allowed"}), 400
 
     profile.profile_image_url = filepath
     db.session.commit()
-    socketio.emit("profile_image_updated", {"profile_id": profile_id, "image_url": filepath})
-    return jsonify({"message": "Image uploaded", "path": filepath}), 200
+    url = public_image_url(filepath)
+    socketio.emit("profile_image_updated", {"profile_id": profile_id, "image_url": url})
+    return jsonify({"message": "Image uploaded", "path": url}), 200
 
 @profile_bp.route("/uploads/profile_images/<filename>", methods=["GET"])
 def serve_image(filename):

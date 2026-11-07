@@ -1,6 +1,6 @@
 from flask import Flask, request, redirect, session, render_template, send_from_directory
 from flask_jwt_extended import create_access_token
-from extensions import db, socketio, jwt
+from extensions import db, socketio, jwt, limiter
 from config import DB_PASSWORD, DB_USER, DB_HOST, DB_NAME, UPLOAD_FOLDER, JWT_KEY, SECRET_KEY, BROWSER_PASSWORD, SESSION_MINUTES
 from routes.auth_routes import auth_bp
 from routes.profile_routes import profile_bp
@@ -15,6 +15,8 @@ from logic.profileLogic import Profile
 from logic.gameLogic import Game
 from logic.authLogic import LoginCode
 from sqlalchemy.engine import URL
+from werkzeug.middleware.proxy_fix import ProxyFix
+import hmac
 
 
 
@@ -30,10 +32,16 @@ def create_app():
     app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
     app.config["SECRET_KEY"] = SECRET_KEY
     app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(minutes=SESSION_MINUTES)
+    app.config["SESSION_COOKIE_SECURE"] = True    
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"  
+    app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
     os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
     db.init_app(app)
     jwt.init_app(app)
+    limiter.init_app(app)
     socketio.init_app(app, cors_allowed_BASE_URLs="*", async_mode="threading", ping_interval=2, ping_timeout=10)
 
     app.register_blueprint(auth_bp)
@@ -90,9 +98,10 @@ def create_app():
         return "", 401
 
     @app.route("/dashlogin", methods=["POST"])
+    @limiter.limit("5 per minute; 20 per hour")
     def browser_login():
-        password = request.form.get("password")
-        if password == BROWSER_PASSWORD:
+        password = request.form.get("password") or ""
+        if hmac.compare_digest(password.encode(), BROWSER_PASSWORD.encode()):
             session.permanent = True
             session["jwt"] = create_access_token(identity="browser")
             session["expires_at"] = (datetime.now(timezone.utc) + timedelta(minutes=SESSION_MINUTES)).isoformat()

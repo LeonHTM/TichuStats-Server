@@ -2,9 +2,10 @@ from flask import Blueprint, jsonify, request, session, redirect, render_templat
 from itsdangerous import URLSafeTimedSerializer, BadSignature
 from flask_jwt_extended import get_jwt_identity, decode_token,create_access_token, verify_jwt_in_request
 from logic.profileLogic import Profile
-from logic.authLogic import generate_and_send_code, verify_code
+from logic.authLogic import generate_and_send_code, verify_code, too_many_codes
 from functools import wraps
 from config import APP_SECRET_TOKEN, SIGNUP_TOKEN_MAX_AGE
+from extensions import limiter
 
 auth_bp = Blueprint("auth", __name__)
 
@@ -97,35 +98,39 @@ def admin_required(fn):
 
 
 @auth_bp.route("/login/request-code", methods=["POST"])
+@limiter.limit("5 per minute; 30 per hour")
 @app_token_required
 def request_login_code():
-    data = request.get_json()
-    if not data:
-            return jsonify({"error": "No data provided"}), 400
-    email = data["email"]
-    language_code = data["language_code"]
-    email = email.strip().lower()
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    language_code = data.get("language_code") or "en"
     if not email:
         return jsonify({"error": "Email required"}), 400
 
+    if too_many_codes(email):
+        return jsonify({"error": "too_many_requests"}), 429
 
-    generate_and_send_code(email,language_code)
+    generate_and_send_code(email, language_code)
 
     return jsonify({"message": "Code sent."}), 200
 
 
-@auth_bp.route("/login/verify-code/<email>/<code>", methods=["POST"])
+# New clients send email + code in the JSON body (keeps them out of access logs).
+@auth_bp.route("/login/verify-code", methods=["POST"])
+@limiter.limit("10 per minute; 60 per hour")
 @app_token_required
-def verify_login_code(email, code):
-    email = email.strip().lower()
-    code = code.strip()
+def verify_login_code(email=None, code=None):
+    if email is None or code is None:
+        data = request.get_json(silent=True) or {}
+        email = data.get("email") or ""
+        code = data.get("code") or ""
+    email = str(email).strip().lower()
+    code = str(code).strip()
 
     if not email or not code:
-        print("Email and code reuquired")
         return jsonify({"error": "Email and code required"}), 400
 
     if not verify_code(email, code):
-        print("Expired code")
         return jsonify({"error": "Invalid or expired code"}), 401
 
     profile = Profile.query.filter_by(email=email).first()
@@ -135,5 +140,5 @@ def verify_login_code(email, code):
         token = create_access_token(identity=str(profile.id))
         return jsonify({"verified": True, "exists": True, "token": token, "id": profile.id}), 200
 
-    
+    # New user: hand out a short-lived proof that this email was verified
     return jsonify({"verified": True, "exists": False, "signup_token": make_signup_token(email)}), 200

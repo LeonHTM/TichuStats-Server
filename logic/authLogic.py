@@ -1,4 +1,5 @@
-import random
+import secrets
+import hmac
 import hashlib
 import smtplib
 from email.mime.text import MIMEText
@@ -12,6 +13,7 @@ from config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, TE
 
 CODE_EXPIRY_MINUTES = 10
 MAX_ATTEMPTS = 5
+MAX_CODES_PER_HOUR = 5
 
 
 class LoginCode(db.Model):
@@ -116,12 +118,16 @@ def send_email(to_email: str, code: str, language_code: str) -> bool:
         logger.error("Connection error sending to %s: %s", to_email, e)
     return False
 
+def too_many_codes(email: str) -> bool:
+    since = datetime.utcnow() - timedelta(hours=1)
+    count = LoginCode.query.filter(LoginCode.email == email, LoginCode.created_at >= since).count()
+    return count >= MAX_CODES_PER_HOUR
 
 def generate_and_send_code(email: str,language_code:str) -> None:
     # Invalidate any previous unused codes for this email
     LoginCode.query.filter_by(email=email, used=False).update({"used": True})
 
-    code = f"{random.randint(0, 999999):06d}"
+    code = f"{secrets.randbelow(1_000_000):06d}"
     print(f"CODE:{code}")
 
     login_code = LoginCode(
@@ -154,7 +160,7 @@ def verify_code(email: str, code: str) -> bool:
 
     entry.attempts += 1
 
-    if entry.code_hash != _hash_code(code):
+    if not hmac.compare_digest(entry.code_hash, _hash_code(code)):
         db.session.commit()
         return False
 
