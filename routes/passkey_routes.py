@@ -13,6 +13,7 @@ from logic.passkeyLogic import Credential, WebAuthnChallenge
 from logic.gameLogic import EloHistory
 from routes.auth_routes import app_token_required, issue_token
 from config import RP_ID, RP_NAME, ORIGIN
+from logic.authLogic import send_passkey_email
 
 from webauthn import (
     generate_authentication_options,
@@ -194,6 +195,13 @@ def add_options():
     if profile is None:
         return jsonify({"error": "unknown_user"}), 404
 
+    data = request.get_json(silent=True) or {}
+    language_code = data.get("language_code","en")
+    timezone_str = data.get("timezone_str", "UTC")
+
+    
+    
+
     existing = Credential.query.filter_by(profile_id=profile.id).all()
     exclude_credentials = [PublicKeyCredentialDescriptor(id=c.credential_id) for c in existing]
 
@@ -215,8 +223,14 @@ def add_options():
     challenge_id = str(uuid.uuid4())
     _save_challenge(challenge_id, profile.id, options.challenge, "registration")
 
+    if profile.email:
+        send_passkey_email(profile.email,profile.name,language_code,timezone_str)
+
     body = json.loads(options_to_json(options))
     body["challengeId"] = challenge_id
+
+    
+
     return jsonify(body)
 
 

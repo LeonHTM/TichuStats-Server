@@ -1,16 +1,29 @@
-import secrets
-import hmac
 import hashlib
+import hmac
+import logging
+import secrets
 import smtplib
-from email.mime.text import MIMEText
+import socket
 from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from config import (
+    CODE_EXPIRY_MINUTES,
+    MAX_ATTEMPTS,
+    MAX_CODES_PER_HOUR,
+    SMTP_FROM,
+    SMTP_HOST,
+    SMTP_PASSWORD,
+    SMTP_PORT,
+    SMTP_USER,
+)
 from extensions import db
-from config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, CODE_EXPIRY_MINUTES, MAX_ATTEMPTS, MAX_CODES_PER_HOUR 
-from localization import CODE_MAIL_TEXTS
+from localization import CODE_MAIL_TEXTS, PASSKEY_MAIL_TEXTS
+from templates.html_templates import HTML_CODE_TEMPLATE, HTML_PASSKEY_TEMPLATE
 
+logger = logging.getLogger(__name__)
 
 
 class LoginCode(db.Model):
@@ -29,70 +42,7 @@ def _hash_code(code: str) -> str:
     return hashlib.sha256(code.encode()).hexdigest()
 
 
-import logging
-import smtplib
-import socket
-
-logger = logging.getLogger(__name__)
-
-HTML_TEMPLATE = """\
-<!DOCTYPE html>
-<html lang="{lang}">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="color-scheme" content="dark" />
-  <meta name="supported-color-schemes" content="dark" />
-  <title>TichuStats</title>
-</head>
-<body style="margin:0; padding:0; background-color:#1c1c1e; color:#f5f5f7; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; -webkit-font-smoothing:antialiased;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#1c1c1e;">
-    <tr>
-      <td align="center" style="padding:80px 24px;">
-        <table role="presentation" width="450" cellpadding="0" cellspacing="0" style="max-width:450px; width:100%; background-color:#1c1c1e; border:1px solid #2c2c2e; border-radius:18px; box-shadow:0 11px 34px rgba(0,0,0,0.65);">
-          <tr>
-            <td style="padding:65px 50px 55px; text-align:left;">
-              <h1 style="margin:0 0 24px 0; font-size:34px; font-weight:600; letter-spacing:-0.374px; color:#f5f5f7; line-height:1.1;">TichuStats</h1>
-              <p style="margin:0; font-size:17px; line-height:1.47; letter-spacing:-0.374px; color:#a1a1a6;">{intro}</p>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:20px; margin-bottom:20px;">
-                <tr>
-                  <td align="center" valign="middle" height="75" bgcolor="#252527" style="height:75px; padding:0; background-color:#252527; border:1px solid #2c2c2e; border-radius:12px; font-size:50px; line-height:75px; font-weight:700; letter-spacing:5px; color:#f5f5f7; text-align:center;">{code}</td>
-                </tr>
-              </table>
-              <p style="margin:0; font-size:17px; line-height:1.47; letter-spacing:-0.374px; color:#a1a1a6;">{expiry}</p>
-              <p style="margin:50px 0 0 0; font-size:14px; line-height:1.47; letter-spacing:-0.374px; color:#a1a1a6;">{sign}</p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#1c1c1e;">
-    <tr>
-      <td align="center" style="border-top:1px solid #2c2c2e; padding:20px 24px; font-size:12px; letter-spacing:-0.12px; color:#a1a1a6;">
-        <a href="mailto:leon@tichu.dev" style="color:#a1a1a6; text-decoration:none;">{contact}</a> | <a href="https://tichu.dev/privacy" style="color:#a1a1a6; text-decoration:none;">{privacy}}</a>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-"""
-
-def send_email(to_email: str, code: str, language_code: str) -> bool:
-    lang = language_code if language_code in CODE_MAIL_TEXTS else "en"
-    t = CODE_MAIL_TEXTS[lang]
-    m = CODE_EXPIRY_MINUTES
-
-    subject = t["subject"]
-    text_body = t["text"].format(code=code, m=m)
-    html_body = HTML_TEMPLATE.format(
-        lang=lang,
-        intro=t["intro"],
-        code=code,
-        expiry=t["expiry"].format(m=m),
-        sign=t["sign"],
-    )
-
+def _send_mail(to_email: str, subject: str, text_body: str, html_body: str) -> bool:
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = SMTP_FROM
@@ -115,12 +65,82 @@ def send_email(to_email: str, code: str, language_code: str) -> bool:
         logger.error("Connection error sending to %s: %s", to_email, e)
     return False
 
+
+def send_code_email(to_email: str, code: str, language_code: str) -> bool:
+    lang = language_code if language_code in CODE_MAIL_TEXTS else "en"
+    t = CODE_MAIL_TEXTS[lang]
+    m = CODE_EXPIRY_MINUTES
+
+    html_body = HTML_CODE_TEMPLATE.format(
+        lang=lang,
+        intro=t["intro"],
+        code=code,
+        expiry=t["expiry"].format(m=m),
+        sign=t["sign"],
+        contact=t["contact"],
+        privacy=t["privacy"],
+    )
+    text_body = t["text"].format(code=code, m=m)
+
+    return _send_mail(to_email, t["subject"], text_body, html_body)
+
+
+def _get_zone(tz_name: str | None) -> ZoneInfo:
+    try:
+        return ZoneInfo(tz_name or "UTC")
+    except (ZoneInfoNotFoundError, ValueError):
+        logger.warning("Unknown timezone %r, falling back to UTC", tz_name)
+        return ZoneInfo("UTC")
+
+
+def send_passkey_email(
+    to_email: str,
+    to_name:str,
+    language_str: str,
+    timezone_name: str = "UTC",
+    created_at: datetime | None = None,
+) -> bool:
+    lang = language_str if language_str in PASSKEY_MAIL_TEXTS else "en"
+    p = PASSKEY_MAIL_TEXTS[lang]
+
+    created_at = created_at or datetime.now(timezone.utc)
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    time_str = created_at.astimezone(_get_zone(timezone_name)).strftime("%H:%M")
+    text = p["text"].format(m=time_str)
+    intro = p["intro"].format(m=to_name)
+
+    html_body = HTML_PASSKEY_TEMPLATE.format(
+        lang=lang,
+        intro=intro,
+        text=text,
+        please_contact_1 = p["please_contact_1"],
+        please_contact_2=p["please_contact_2"],
+        please_contact_3=p["please_contact_3"],
+        sign=p["sign"],
+        contact=p["contact"],
+        privacy=p["privacy"],
+    )
+    text_body = "\n\n".join([
+        intro,
+        p["text"].format(m=time_str),
+        p["please_contact_1"]+" "+p["please_contact_2"]+" "+p["please_contact_3"],
+        p["sign"].replace("<br>", "\n"),
+    ])
+
+    return _send_mail(to_email, p["subject"], text_body, html_body)
+
+
 def too_many_codes(email: str) -> bool:
     since = datetime.utcnow() - timedelta(hours=1)
-    count = LoginCode.query.filter(LoginCode.email == email, LoginCode.created_at >= since).count()
+    count = LoginCode.query.filter(
+        LoginCode.email == email,
+        LoginCode.created_at >= since,
+    ).count()
     return count >= MAX_CODES_PER_HOUR
 
-def generate_and_send_code(email: str,language_code:str) -> None:
+
+def generate_and_send_code(email: str, language_code: str) -> None:
     # Invalidate any previous unused codes for this email
     LoginCode.query.filter_by(email=email, used=False).update({"used": True})
 
@@ -134,7 +154,7 @@ def generate_and_send_code(email: str,language_code:str) -> None:
     db.session.add(login_code)
     db.session.commit()
 
-    send_email(email, code,language_code)
+    send_code_email(email, code, language_code)
 
 
 def verify_code(email: str, code: str) -> bool:
