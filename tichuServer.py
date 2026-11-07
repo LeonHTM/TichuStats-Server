@@ -10,7 +10,7 @@ from routes.round_routes import round_bp
 from routes.passkey_routes import passkey_bp
 from datetime import timedelta, datetime, timezone
 import os
-from routes.auth_routes import jwt_or_session_required
+from routes.auth_routes import admin_required
 from logic.profileLogic import Profile
 from logic.gameLogic import Game
 from logic.authLogic import LoginCode
@@ -100,7 +100,7 @@ def create_app():
         return render_template("login.html", error=True)
 
     @app.route("/dashboard/profiles", methods=["GET"])
-    @jwt_or_session_required
+    @admin_required
     def dashboardprofiles():
         from logic.profileLogic import ProfileStats
         profiles = Profile.query.all()
@@ -117,7 +117,7 @@ def create_app():
         return render_template("dashboard-profiles.html", profiles=profiles, session_seconds=remaining)
     
     @app.route("/dashboard/games", methods=["GET"])
-    @jwt_or_session_required
+    @admin_required
     def dashboard_games():
         from logic.roundLogic import Round
 
@@ -198,7 +198,7 @@ def create_app():
         return render_template("dashboard-games.html", games=games_data, session_seconds=remaining)
     
     @app.route("/dashboard/rounds", methods=["GET"])
-    @jwt_or_session_required
+    @admin_required
     def dashboardrounds():
         from logic.profileLogic import ProfileStats
         profiles = Profile.query.all()

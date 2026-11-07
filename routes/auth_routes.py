@@ -1,11 +1,28 @@
-from flask import Blueprint, jsonify, request, session, redirect, render_template
+from flask import Blueprint, jsonify, request, session, redirect, render_template, current_app
+from itsdangerous import URLSafeTimedSerializer, BadSignature
 from flask_jwt_extended import get_jwt_identity, decode_token,create_access_token, verify_jwt_in_request
 from logic.profileLogic import Profile
 from logic.authLogic import generate_and_send_code, verify_code
 from functools import wraps
-from config import APP_SECRET_TOKEN
+from config import APP_SECRET_TOKEN, SIGNUP_TOKEN_MAX_AGE
 
 auth_bp = Blueprint("auth", __name__)
+
+
+def _signup_serializer():
+    return URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt="signup-email")
+
+def make_signup_token(email):
+    return _signup_serializer().dumps({"email": email})
+
+def read_signup_token(token):
+    # Returns the verified email, or None if the token is missing, forged or expired
+    if not token or not isinstance(token, str):
+        return None
+    try:
+        return _signup_serializer().loads(token, max_age=SIGNUP_TOKEN_MAX_AGE)["email"]
+    except (BadSignature, KeyError, TypeError):
+        return None
 
 #When first login in the App does not have an authToken yet, it uses appToken which is a Sectret String
 def app_token_required(f):
@@ -67,6 +84,17 @@ def caller_is_admin():
     caller = Profile.query.get(current_id)
     return bool(caller and caller.is_admin)
 
+def admin_required(fn):
+    @wraps(fn)
+    @jwt_or_session_required
+    def wrapper(*args, **kwargs):
+        if not caller_is_admin():
+            if request.accept_mimetypes.accept_html:
+                return render_template("error.html"), 403
+            return jsonify({"error": "forbidden"}), 403
+        return fn(*args, **kwargs)
+    return wrapper
+
 
 @auth_bp.route("/login/request-code", methods=["POST"])
 @app_token_required
@@ -108,4 +136,4 @@ def verify_login_code(email, code):
         return jsonify({"verified": True, "exists": True, "token": token, "id": profile.id}), 200
 
     
-    return jsonify({"verified": True, "exists": False}), 200
+    return jsonify({"verified": True, "exists": False, "signup_token": make_signup_token(email)}), 200

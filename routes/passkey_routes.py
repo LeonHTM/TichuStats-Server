@@ -261,7 +261,8 @@ def add_verify():
     return jsonify({"success": True, "credential": new_credential.to_dict()})
 
 
-# Connecting an email to an existing account
+# Connecting an email to an existing account currently deavtiaved
+"""
 @passkey_bp.patch("/connect_email")
 @jwt_required()
 def connect_email():
@@ -282,7 +283,7 @@ def connect_email():
     db.session.commit()
     socketio.emit("username_updated", {"profile_id": profile.id, "name": profile.name})
     return jsonify(profile.to_dict())
-
+"""
 
 @passkey_bp.post("/login/options")
 @app_token_required

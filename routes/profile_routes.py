@@ -10,7 +10,7 @@ from werkzeug.utils import secure_filename
 from extensions import db, socketio
 from logic.profileLogic import Profile, UserDeviceToken, ProfileSettings, calculateStats, ProfileStats, ProfileFriend, FriendRequest
 from config import SESSION_MINUTES, ALLOWED_EXTENSIONS, APP_SECRET_TOKEN, MAX_HISTORY_ENTRIES, TIMEFRAMES
-from routes.auth_routes import jwt_or_session_required, app_token_required, current_identity, caller_is_admin, is_dashboard_session
+from routes.auth_routes import jwt_or_session_required, app_token_required, current_identity, caller_is_admin, is_dashboard_session, read_signup_token
 from logic.gameLogic import EloHistory, handle_user_deleted
 from logic.gameLogic import Game
 from logic.roundLogic import Round
@@ -290,15 +290,19 @@ def get_profilessimple():
 @profile_bp.route("/add_profile", methods=["POST"])
 @app_token_required
 def create_profile():
-    data = request.get_json()
-    if not data or not data.get("email"):
-        return jsonify({"error": "Email is required"}), 400
+    data = request.get_json(silent=True) or {}
 
-    existing = Profile.query.filter_by(email=data["email"]).first()
+    # The email comes ONLY from the signup token issued by /login/verify-code,
+    # never from the request body — otherwise anyone could register any address.
+    email = read_signup_token(data.get("signup_token"))
+    if not email:
+        return jsonify({"error": "invalid_signup_token"}), 401
+
+    existing = Profile.query.filter_by(email=email).first()
     if existing:
         return jsonify({"error": "email_in_use"}), 409
 
-    new_profile = Profile(email=data["email"], name=data.get("name"))
+    new_profile = Profile(email=email, name=data.get("name"))
     db.session.add(new_profile)
     db.session.flush()
 
@@ -307,7 +311,7 @@ def create_profile():
 
     from flask_jwt_extended import create_access_token
     token = create_access_token(identity=str(new_profile.id))
-    socketio.emit("profile_created", {"id": new_profile.id, "email": new_profile.email, "name": new_profile.name})
+    socketio.emit("profile_created", {"id": new_profile.id, "name": new_profile.name})
     return jsonify({"id": new_profile.id, "token": token}), 201
 
 @profile_bp.route("/dashboard/update_profile/<profile_id>", methods=["POST"])
