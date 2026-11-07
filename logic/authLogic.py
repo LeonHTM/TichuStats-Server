@@ -8,7 +8,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from extensions import db
-from config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, TEXTS, CODE_EXPIRY_MINUTES, MAX_ATTEMPTS, MAX_CODES_PER_HOUR 
+from config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, CODE_EXPIRY_MINUTES, MAX_ATTEMPTS, MAX_CODES_PER_HOUR 
+from localization import CODE_MAIL_TEXTS
 
 
 
@@ -69,7 +70,7 @@ HTML_TEMPLATE = """\
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#1c1c1e;">
     <tr>
       <td align="center" style="border-top:1px solid #2c2c2e; padding:20px 24px; font-size:12px; letter-spacing:-0.12px; color:#a1a1a6;">
-        <a href="mailto:leon@tichu.dev" style="color:#a1a1a6; text-decoration:none;">Contact</a> | <a href="https://tichu.dev/privacy" style="color:#a1a1a6; text-decoration:none;">Privacy Policy</a>
+        <a href="mailto:leon@tichu.dev" style="color:#a1a1a6; text-decoration:none;">{contact}</a> | <a href="https://tichu.dev/privacy" style="color:#a1a1a6; text-decoration:none;">{privacy}}</a>
       </td>
     </tr>
   </table>
@@ -78,8 +79,8 @@ HTML_TEMPLATE = """\
 """
 
 def send_email(to_email: str, code: str, language_code: str) -> bool:
-    lang = language_code if language_code in TEXTS else "en"
-    t = TEXTS[lang]
+    lang = language_code if language_code in CODE_MAIL_TEXTS else "en"
+    t = CODE_MAIL_TEXTS[lang]
     m = CODE_EXPIRY_MINUTES
 
     subject = t["subject"]
