@@ -8,12 +8,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from extensions import db
-from config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, TEXTS
+from config import SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, TEXTS, CODE_EXPIRY_MINUTES, MAX_ATTEMPTS, MAX_CODES_PER_HOUR 
 
-
-CODE_EXPIRY_MINUTES = 10
-MAX_ATTEMPTS = 5
-MAX_CODES_PER_HOUR = 5
 
 
 class LoginCode(db.Model):
@@ -128,7 +124,6 @@ def generate_and_send_code(email: str,language_code:str) -> None:
     LoginCode.query.filter_by(email=email, used=False).update({"used": True})
 
     code = f"{secrets.randbelow(1_000_000):06d}"
-    print(f"CODE:{code}")
 
     login_code = LoginCode(
         email=email,

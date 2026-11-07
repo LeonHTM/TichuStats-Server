@@ -339,7 +339,7 @@ def login_verify():
         parsed_credential = parse_authentication_credential_json(json.dumps(credential))
     except Exception:  # noqa: BLE001
         current_app.logger.warning("Passkey verification_failed", exc_info=True)
-        return jsonify({"error": "invalid credentials"}), 400
+        return jsonify({"error": "invalid_credentials"}), 400
 
     stored = Credential.query.filter_by(credential_id=parsed_credential.raw_id).first()
     if stored is None:

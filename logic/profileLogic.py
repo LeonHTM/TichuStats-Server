@@ -4,7 +4,6 @@ from logic.roundLogic import Round
 from datetime import datetime
 import os
 
-import os
 
 
 def public_image_url(path):
