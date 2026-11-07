@@ -145,7 +145,7 @@ def recalculate(game_id,tie=False):
 
     db.session.commit()
 
-    socketio.emit("game_recalculated", {"game_id": game_id})
+    emit_to_game("game_recalculated", {"game_id": game_id}, game)
 
     return jsonify({
         "game_id": game_id,
@@ -234,11 +234,11 @@ def handle_user_deleted(profile_id):
                 #Delete Game
                 db.session.delete(game)
                 db.session.commit()
-                socketio.emit("game_deleted", {"game_id": game.id})
+                emit_to_users("game_deleted", {"game_id": game.id}, [profile_id])
                 return jsonify({"success": True}), 200
         else:
             print(f"delete_profile: replaced profile {profile_id} with guest {replacement_id} in game {game.id}")
-            socketio.emit("game_updated", game.to_dict())
+            emit_to_game("game_updated", game.to_dict(), game)
 
     db.session.commit()
     return None, 200 
@@ -312,7 +312,7 @@ def calculate_elo(game_id, winner):
 
     #Commit and emit
     db.session.commit()
-    socketio.emit("elo_updated", {
+    emit_to_players("elo_updated", {
         "players": [
             {"id": p.id, "elo": safe_elo(p)}
             for p in [team1_player1, team1_player2, team2_player1, team2_player2]
