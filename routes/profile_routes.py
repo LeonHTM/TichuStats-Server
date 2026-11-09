@@ -307,6 +307,17 @@ def get_profilessimple():
     profiles = Profile.query.all()
     return jsonify([p.to_dict_simple() for p in profiles])
 
+@profile_bp.route("/profile/<int:profile_id>", methods=["GET"])
+@jwt_required()
+def get_profile(profile_id):
+    current_id = int(get_jwt_identity())
+    if current_id != profile_id:
+        return jsonify({"error": "forbidden"}), 403
+    profile = db.session.get(Profile, profile_id)
+    if profile is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(profile.to_dict_simple())
+
 @profile_bp.route("/add_profile", methods=["POST"])
 @app_token_required
 def create_profile():
